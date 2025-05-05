@@ -1,96 +1,99 @@
-import {createServer} from "http"
-import {readFileSync, writeFileSync} from "fs"
-import crypto from "crypto"
-import path from "path"
+import {readFile,writeFile} from "fs/promises";
+import path from "path";
+import crypto from "crypto";
+import express from "express";
 
-const DATA_FILE = path.join("data","links.json")
+const app = express();
 
-const serverFile = (file,content,res) => {
-    try{
-        var data = readFileSync(file,"utf-8")
-        res.writeHead(200,{"content-type":content})
-        res.end(data)
-    }catch(error){
-        res.writeHead(404,{"content-type":"text/plain"})
-        res.end("404 Page Not Found")
+const DATA_FILE = path.join("data", "links.json");
+
+app.use(express.static("public"));
+app.use(express.urlencoded({ extended: true }));
+
+const LoadLinks = async () => {
+  try {
+    const data = await readFile(DATA_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      await writeFile(DATA_FILE, JSON.stringify({}));
+      return {};
     }
-}
+    throw error;
+  }
+};
 
-const loadLinks = () => {
-    try{
-        const data= readFileSync(DATA_FILE,"utf-8")
-        return JSON.parse(data)
-    } catch (error) {
-        if(error.code === "ENOENT"){
-            writeFileSync(DATA_FILE,JSON.stringify({}))
-            return {}
-        }
-        throw error
+const saveLinks = async (links) => {
+  try {
+    await writeFile(DATA_FILE, JSON.stringify(links));
+  } catch (error) {
+    console.error("Error saving links:", error);
+  }
+};
+
+app.get("/", async (req, res) => {
+  try {
+    const file = await readFile(
+      path.join("views", "index.html"),
+      "utf-8"
+    );
+    const links = await LoadLinks();
+
+    const content = file.toString().replaceAll(
+      "{{shortened_urls}}",
+      Object.entries(links)
+        .map(
+          ([shortCode, url]) =>
+            `<li><a href="/${shortCode}" target="_blank">${req.host}/${shortCode}</a> -> ${url}</li>`
+        )
+        .join("")
+    );
+    return res.send(content);
+  } catch (error) {
+    return res.status(500).send("Internal Server Error");
+  }
+});
+
+app.post("/", async (req, res) => {
+  try {
+    const { url, shortCode } = req.body;
+    const finalShortCode = shortCode || crypto.randomBytes(4).toString("hex");
+
+    const links = await LoadLinks();
+
+    if (links[finalShortCode]) {
+      return res.status(400).send("Short code already exists");
     }
-}
 
-const saveLinks = (links) => {
-    writeFileSync(DATA_FILE,JSON.stringify(links))
-}
+    links[finalShortCode] = url;
+    await saveLinks(links);
 
-const server = createServer((req,res)=>{
-    if(req.method==="GET"){
-        if(req.url === "/")
-        {
-            serverFile("index.html","text/html",res)
-        }
-        else if(req.url === "/style.css")
-        {
-            serverFile("style.css","text/css",res)
-        }
-        else if(req.url === "/links"){
-            const links = loadLinks()
-            res.writeHead(200,{"content-type":"application/json"})
-            return res.end(JSON.stringify(links))
-        }else{
-            const links = loadLinks()
-            const shortCode = req.url.slice(1)
-            console.log("Links Red. ",req.url)
-            if(links[shortCode]){
-                res.writeHead(302,{location : links[shortCode]})
-                return res.end()
-            }
-            res.writeHead(400,{"content-type":"text/plain"})
-            res.end("404 Page Not Found")
-        }
+    return res.redirect("/");
+  } catch (error) {
+    console.error(error);
+    return res.status(500).send("Internal Server Error");
+  }
+});
+
+app.get("/:shortCode", async (req, res) => {
+  try {
+    const { shortCode } = req.params;
+    const links = await LoadLinks();
+
+    if(!links[shortCode]) {
+      return res.status(404).send("Short code not found");
     }
 
-    if(req.method==="POST" && req.url==="/shorten"){
+    return res.redirect(links[shortCode]);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).send("Internal Server Error");
+  }
+});
 
-        const links = loadLinks()
 
-        let data=""
-        req.on("data",(chunk)=>{
-            data+=chunk
-        })
-        req.on("end",()=>{
-            console.log(data)
-            const {url,shortCode} = JSON.parse(data)
 
-            if(!url){
-                res.writeHead(400,{"content-type":"text/plain"})
-                res.end("404 Page Not Found")
-            }
-
-            const finalShortCode = shortCode || crypto.randomBytes(4).toString("hex")
-            
-            if(links[finalShortCode]){
-                res.writeHead(400,{"Content-type":"text/plain"})
-                return res.end("Short Code already exists.Please Choose another.")
-            }
-
-            links[finalShortCode] = url
-            saveLinks(links)
-
-            res.writeHead(200,{"Content-type":"application/json"})
-            res.end(JSON.stringify({success:true,shortCode:finalShortCode}))
-        })
-    }
-})
-
-server.listen(1411)
+const port = 1234;
+app.listen(port, () => {
+  console.log(`Server is running on http://localhost:${port}`);
+});
